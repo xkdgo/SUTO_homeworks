@@ -50,7 +50,7 @@ class Descriptor:
         if instance is None:
             return self
         else:
-            return instance.__dict__[self.name]
+            return instance.__dict__.get(self.name, None)
 
     def __set__(self, instance, value):
         instance.__dict__[self.name] = value
@@ -99,7 +99,7 @@ class Structure(metaclass=StructMeta):
 
 
 class Nullable(Descriptor):
-    def __init__(self, *args, nullable=True, **kwargs):
+    def __init__(self, *args, nullable=False, **kwargs):
         self.nullable = nullable
         super().__init__(*args, **kwargs)
 
@@ -225,13 +225,15 @@ class OnlineScoreRequest(Structure):
 
     def _validate(self):
         super()._validate()
+        if self.gender == 0:
+            self.not_null.append("gender")
         arg_pairs = [
             ("phone", "email"),
             ("first_name", "last_name"),
             ("gender", "birthday")
         ]
         if not any(all(name in self.not_null for name in field) for field in arg_pairs):
-            self.errors["arguments"] = "Missing values in pairs of required arguments"
+            self.errors["arguments"] = 'Valid pairs are: phone + email, first name + last name or gender + birthday'
 
     def get_score(self):
         score = 0
@@ -239,7 +241,7 @@ class OnlineScoreRequest(Structure):
             score += 1.5
         if self.email:
             score += 1.5
-        if self.birthday and self.gender:
+        if self.birthday and (self.gender or self.gender == 0):
             score += 1.5
         if self.first_name and self.last_name:
             score += 0.5
