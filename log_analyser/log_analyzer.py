@@ -12,6 +12,9 @@ import logging
 from statistics import median
 
 
+Logfile: namedtuple = namedtuple('Logfile', 'path date ext')
+
+
 def init_config(config_filename=None):
     # default config
     initial_config = {
@@ -19,7 +22,6 @@ def init_config(config_filename=None):
         "REPORT_DIR": "./reports",
         "REPORT_SIZE": 1000,
         "REPORT_TEMPLATE": "./templates/report.html",
-        # "REPORT_LOG": "./log_analyzer.log",
         "PARSE_ERROR_PERC_MAX": 0.1,
         "DEBUG": False
     }
@@ -41,17 +43,17 @@ def init_config(config_filename=None):
 
 
 def catchfile(directory):
-    Logfile = namedtuple('Logfile', 'path date ext')
     latest_file = None
     regexline = r"^(?:nginx-access-ui).*?(?P<log_time>\d{8})\.(?P<ext>log|gz)$"
     regex = re.compile(regexline)
     # check directory
     if not os.path.isdir(directory):
         raise RuntimeError("Wrong directory name %s" % directory)
-    if not os.listdir(directory):
+    files = os.listdir(directory)
+    if not files:
         logging.debug("Could not find a logfile in empty directory %s" % directory)
         return
-    for file in os.listdir(directory):
+    for file in files:
         path = os.path.join(directory, file)
         if not os.path.isfile(path):
             continue
@@ -86,13 +88,16 @@ def nginx_log_parser(line):
         log['response_time'] = match.group('response_time')
     else:
         raise RuntimeWarning("Error matching line %s" % line)
-    log['response_time'] = float(log['response_time']) if log['response_time'] != '-' else 0
+    try:
+        log['response_time'] = float(log['response_time'])
+    except ValueError:
+        log['response_time'] = 0
     return log
 
 
 def process_lines_in_file(filecatcher_result_f):
-    with gzip.open(filecatcher_result_f.path, 'rb') if filecatcher_result_f.ext == "gz" else open(
-            filecatcher_result_f.path, 'rb') as file_item:
+    fopen = gzip.open if filecatcher_result_f.ext == "gz" else open
+    with fopen(filecatcher_result_f.path, 'rb') as file_item:
         for line in file_item:
             try:
                 yield (nginx_log_parser(line.decode('utf-8'))), None
@@ -133,7 +138,7 @@ def process_and_count_statistics_from_file_lines(filecatcher_result_process, err
                                             err_counter,
                                             total_response_time))
     # Count err_percentage if exceeds limit raise Exception
-    if float(parsed_counter) / line_counter < (1.0 - error_ratio):
+    if parsed_counter / line_counter < (1.0 - error_ratio):
         logging.info('Wrong format. %d of %d lines parsed. '
                      'More than %d%% of errors - failed parsing',
                      parsed_counter, line_counter,
