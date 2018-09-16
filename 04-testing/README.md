@@ -9,6 +9,7 @@
 
 ## Тестирование
 `py.test -v -l test.py`
+
 `py.test -s -v -l test.py`
 
 ## Примеры запросов
