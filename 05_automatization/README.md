@@ -36,7 +36,7 @@ Connection
 
 для 5 worker
 
-`ab -n 50000 -c 100 -r "http://localhost:8080/"
+```ab -n 50000 -c 100 -r "http://localhost:8080/"
 This is ApacheBench, Version 2.3 <$Revision: 1706008 $>
 Copyright 1996 Adam Twiss, Zeus Technology Ltd, http://www.zeustech.net/
 Licensed to The Apache Software Foundation, http://www.apache.org/
@@ -90,10 +90,10 @@ Percentage of the requests served within a certain time (ms)
   98%    220
   99%    230
  100%    319 (longest request)
-`
+```
 ### Результаты тестов
 
-`
+```
 ./httptest.py
 directory index file exists ... ok
 document root escaping forbidden ... ok
@@ -123,4 +123,4 @@ Ran 22 tests in 0.254s
 
 OK
 
-`
+```
