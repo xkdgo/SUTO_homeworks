@@ -17,7 +17,7 @@ class MultiprocessSocketServer:
         self.port = port
         self.workers = workers
         self.rootdir = rootdir
-
+        self.threads = []
 
     def worker(self, lsock):
         sel = selectors.DefaultSelector()
@@ -33,8 +33,8 @@ class MultiprocessSocketServer:
                         try:
                             message.process_events(mask)
                         except Exception:
-                            print('main: error: exception for',
-                                  f'{message.addr}:\n{traceback.format_exc()}')
+                            logging.debug(
+                                f'main: error: exception for {message.addr}:\n{traceback.format_exc()}')
                             message.close()
         except KeyboardInterrupt:
             print('caught keyboard interrupt, exiting')
@@ -47,7 +47,7 @@ class MultiprocessSocketServer:
             conn, addr = sock.accept()  # Should be ready to read
         except BlockingIOError:
             return
-        print('accepted connection from', addr)
+        logging.debug(f'accepted connection from {addr}')
         conn.setblocking(False)
         message = lib_helper.Message(sel, conn, addr, rootdir)
         sel.register(conn, selectors.EVENT_READ, data=message)
@@ -58,10 +58,15 @@ class MultiprocessSocketServer:
         lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         lsock.bind((self.host, self.port))
         lsock.listen()
-        print('listening on', (self.host, self.port))
+        logging.debug('listening on %s %s' % (self.host, self.port))
         for _ in range(self.workers):
             t = threading.Thread(target=self.worker, args=(lsock,))
             t.start()
+            self.threads.append(t)
+        # Джойнимся явно (ждем завершения потоков)
+        logging.debug(f'Number of Threads {len(self.threads)}')
+        for t in self.threads:
+            t.join()
 
 
 def parse_args():
@@ -82,15 +87,23 @@ def parse_args():
         '-r', '--root', type=str, default='doc_root',
         help='DIRECTORY_ROOT with site files, default - doc_root'
     )
-
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    config = {
+                "REPORT_LOG": None,
+                "DEBUG": True
+              }
+    logging.basicConfig(filename=config.get("REPORT_LOG", None),
+                        level=logging.DEBUG if config.get("DEBUG", None) else logging.INFO,
+                        format='[%(asctime)s] %(levelname).1s %(message)s',
+                        datefmt='%Y.%m.%d %H:%M:%S')
     init_args = dict(host=args.host,
                      port=args.port,
                      workers=args.workers,
-                     rootdir=args.root)
+                     rootdir=args.root,
+                     )
     server = MultiprocessSocketServer(**init_args)
     server.serve_forever()
