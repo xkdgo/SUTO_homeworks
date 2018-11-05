@@ -13,11 +13,29 @@ class Message:
         self.addr = addr
         self._recv_buffer = b''
         self._send_buffer = b''
+        self.ac_in_buffer = b''
+        self.incoming = []
+        self.ac_in_buffer_size = 4096
+        self.set_terminator(b"\r\n\r\n")
         self.method = None
         self.uri = None
         self.request = None
         self.response_created = False
         self.request_processor = HTTPRequestProcessor(rootdir)
+
+    def set_terminator (self, term):
+        "Set the input delimiter.  Can be a fixed string of any length, an integer, or None"
+        self.terminator = term
+
+    def get_terminator(self):
+        return self.terminator
+
+    # grab some more data from the socket,
+    # throw it to the collector method,
+    # check for the terminator,
+    # if found, transition to the next state.
+    def found_terminator(self):
+        self._recv_buffer = self._get_data()
 
     def _set_selector_events_mask(self, mode):
         """Set selector to listen for events: mode is 'r', 'w', or 'rw'."""
@@ -32,17 +50,82 @@ class Message:
         self.selector.modify(self.sock, events, data=self)
 
     def _read(self):
+        # this func code from https://github.com/python/cpython/blob/2.7/Lib/asynchat.py#L112
         try:
-            # Should be ready to read
-            data = self.sock.recv(4096)
+            data = self.sock.recv(self.ac_in_buffer_size)
         except BlockingIOError:
             # Resource temporarily unavailable (errno EWOULDBLOCK)
             pass
         else:
             if data:
-                self._recv_buffer += data
+                self.ac_in_buffer += data
+
+        # Continue to search for self.terminator in self.ac_in_buffer,
+        # while calling self.collect_incoming_data.  The while loop
+        # is necessary because we might read several data+terminator
+        # combos with a single recv(4096).
+
+        while self.ac_in_buffer:
+            lenbuff = len(self.ac_in_buffer)
+            terminator = self.get_terminator()
+            if not terminator:
+                # no terminator, collect it all
+                self.collect_incoming_data(self.ac_in_buffer)
+                self.ac_in_buffer = b''
+            elif isinstance(terminator, (int,)):
+                # numeric terminator
+                n = terminator
+                if lenbuff < n:
+                    self.collect_incoming_data(self.ac_in_buffer)
+                    self.ac_in_buffer = b''
+                    self.terminator = self.terminator - lenbuff
+                else:
+                    self.collect_incoming_data(self.ac_in_buffer[:n])
+                    self.ac_in_buffer = self.ac_in_buffer[n:]
+                    self.terminator = 0
+                    self.found_terminator()
             else:
-                raise RuntimeError('Peer closed.')
+                # 3 cases:
+                # 1) end of buffer matches terminator exactly:
+                #    collect data, transition
+                # 2) end of buffer matches some prefix:
+                #    collect data to the prefix
+                # 3) end of buffer does not match any prefix:
+                #    collect data
+                terminator_len = len(terminator)
+                index = self.ac_in_buffer.find(terminator)
+                if index != -1:
+                    # we found the terminator
+                    if index > 0:
+                        # don't bother reporting the empty string (source of subtle bugs)
+                        self.collect_incoming_data(self.ac_in_buffer[:index])
+                    self.ac_in_buffer = self.ac_in_buffer[index + terminator_len:]
+                    # This does the Right Thing if the terminator is changed here.
+                    self.found_terminator()
+                else:
+                    # check for a prefix of the terminator
+                    index = find_prefix_at_end(self.ac_in_buffer, terminator)
+                    if index:
+                        if index != lenbuff:
+                            # we found a prefix, collect up to the prefix
+                            self.collect_incoming_data(self.ac_in_buffer[:-index])
+                            self.ac_in_buffer = self.ac_in_buffer[-index:]
+                        break
+                    else:
+                        # no prefix, collect it all
+                        self.collect_incoming_data(self.ac_in_buffer)
+                        self.ac_in_buffer = b''
+
+    def collect_incoming_data(self, data):
+        self._collect_incoming_data(data)
+
+    def _collect_incoming_data(self, data):
+        self.incoming.append(data)
+
+    def _get_data(self):
+        d = b''.join(self.incoming)
+        del self.incoming[:]
+        return d
 
     def _write(self):
         if self._send_buffer:
@@ -225,3 +308,24 @@ class HTTPRequestProcessor:
         for match, sub in _hextobyte.items():
             uri_encoded = uri_encoded.replace(match, sub)
         return uri_encoded.decode(errors="replace")
+
+
+# Given 'haystack', see if any prefix of 'needle' is at its end.  This
+# assumes an exact match has already been checked.  Return the number of
+# characters matched.
+# for example:
+# f_p_a_e ("qwerty\r", "\r\n") => 1
+# f_p_a_e ("qwertydkjf", "\r\n") => 0
+# f_p_a_e ("qwerty\r\n", "\r\n") => <undefined>
+
+# this could maybe be made faster with a computed regex?
+# [answer: no; circa Python-2.0, Jan 2001]
+# new python:   28961/s
+# old python:   18307/s
+# re:        12820/s
+# regex:     14035/s
+def find_prefix_at_end(haystack, needle):
+    length = len(needle) - 1
+    while length and not haystack.endswith(needle[:length]):
+        length -= 1
+    return length
