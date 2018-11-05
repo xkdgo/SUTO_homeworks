@@ -12,34 +12,31 @@ import logging
 
 class MultiprocessSocketServer:
 
-    def __init__(self, host="", port=80, workers=5, rootdir=os.path.abspath("./doc_root")):
+    def __init__(self, host="", port=80, workers=5, timeout=3, rootdir=os.path.abspath("./doc_root")):
         self.host = host
         self.port = port
         self.workers = workers
         self.rootdir = rootdir
         self.threads = []
+        self.timeout = timeout
 
-    def worker(self, lsock):
+    def worker(self, lsock, stop):
         sel = selectors.DefaultSelector()
         sel.register(lsock, selectors.EVENT_READ, data=None)
-        try:
-            while True:
-                events = sel.select(timeout=None)
-                for key, mask in events:
-                    if key.data is None:
-                        self.accept_wrapper(key.fileobj, sel)
-                    else:
-                        message = key.data
-                        try:
-                            message.process_events(mask)
-                        except Exception:
-                            logging.debug(
-                                f'main: error: exception for {message.addr}:\n{traceback.format_exc()}')
-                            message.close()
-        except KeyboardInterrupt:
-            print('caught keyboard interrupt, exiting')
-        finally:
-            sel.close()
+        while not stop.is_set():
+            events = sel.select(timeout=self.timeout)
+            for key, mask in events:
+                if key.data is None:
+                    self.accept_wrapper(key.fileobj, sel)
+                else:
+                    message = key.data
+                    try:
+                        message.process_events(mask)
+                    except Exception:
+                        logging.debug(
+                            f'main: error: exception for {message.addr}:\n{traceback.format_exc()}')
+                        message.close()
+        sel.close()
 
     def accept_wrapper(self, sock, sel):
         rootdir = self.rootdir
@@ -59,14 +56,22 @@ class MultiprocessSocketServer:
         lsock.bind((self.host, self.port))
         lsock.listen()
         logging.debug('listening on %s %s' % (self.host, self.port))
+        stop = threading.Event()
         for _ in range(self.workers):
-            t = threading.Thread(target=self.worker, args=(lsock,))
+            t = threading.Thread(target=self.worker, args=(lsock, stop))
             t.start()
             self.threads.append(t)
         # Джойнимся явно (ждем завершения потоков)
         logging.debug(f'Number of Threads {len(self.threads)}')
-        for t in self.threads:
-            t.join()
+        try:
+            for t in self.threads:
+                t.join(self.timeout + 1)
+        except KeyboardInterrupt:
+            stop.set()
+            logging.debug('Shutting down server...')
+            for t in self.threads:
+                t.join(self.timeout + 1)
+                logging.debug(f'Worker {t.name} was stopped')
 
 
 def parse_args():
